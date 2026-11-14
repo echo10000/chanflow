@@ -235,11 +235,14 @@ private fun Library(vm: FlowViewModel, jobs: List<WorkInfo>, onDelete: (List<Med
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf("All") }
     var grouping by rememberSaveable { mutableStateOf(false) }
+    var threadFilter by rememberSaveable { mutableStateOf("") }
+    var threadMenu by remember { mutableStateOf(false) }
     var selecting by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf(setOf<String>()) }
     val watched = vm.history.associateBy { it.post.key }
     val source = if (recent) vm.history.map { h -> vm.saved.firstOrNull { it.key == h.post.key } ?: h.post } else vm.saved
-    var rows = source.filter { "${it.title} ${it.filename} ${it.board}".contains(query, true) &&
+    var rows = source.filter { "${it.title} ${it.filename} ${it.board} ${it.thread}".contains(query, true) &&
+        (threadFilter.isBlank() || "${it.board}_${it.thread}" == threadFilter) &&
         (recent || filter == "All" || (watched.containsKey(it.key) == (filter == "Watched"))) }
     if (grouping) rows = rows.sortedWith(compareBy<MediaPost> { it.board }.thenByDescending { it.thread })
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -276,6 +279,19 @@ private fun Library(vm: FlowViewModel, jobs: List<WorkInfo>, onDelete: (List<Med
             listOf("All", "Unwatched", "Watched").forEach { label ->
                 Text(label, color = if (filter == label) Sage else Gray, fontSize = 11.sp,
                     modifier = Modifier.clickable { filter = label }.padding(vertical = 6.dp))
+            }
+        }
+        Box {
+            TextButton(onClick = { threadMenu = true }, contentPadding = PaddingValues(0.dp)) {
+                Text(if (threadFilter.isBlank()) "All threads" else source.firstOrNull { "${it.board}_${it.thread}" == threadFilter }?.title ?: "Selected thread",
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = Gray)
+            }
+            DropdownMenu(expanded = threadMenu, onDismissRequest = { threadMenu = false }, modifier = Modifier.heightIn(max = 300.dp)) {
+                DropdownMenuItem(text = { Text("All threads", fontSize = 12.sp) }, onClick = { threadFilter = ""; selected = emptySet(); threadMenu = false })
+                source.distinctBy { "${it.board}_${it.thread}" }.forEach { p ->
+                    DropdownMenuItem(text = { Text("/${p.board}/ ${p.title}", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        onClick = { threadFilter = "${p.board}_${p.thread}"; selected = emptySet(); threadMenu = false })
+                }
             }
         }
         DownloadStatus(jobs, vm)
@@ -368,19 +384,18 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
             val uri = if (current.localPath.isNotBlank()) android.net.Uri.fromFile(vm.app.vault.file(current)).toString() else current.url
             val position = vm.history.firstOrNull { it.post.key == current.key }?.let { h -> if (h.duration > h.position + 2000) h.position else 0 } ?: 0
             player.setMediaItem(MediaItem.fromUri(uri), position); player.prepare()
-        } else { player.stop(); player.clearMediaItems(); delay(2000); if (resumed) vm.watched(current) }
+        } else { player.stop(); player.clearMediaItems() }
     }
-    LaunchedEffect(current.key, resumed, pager.isScrollInProgress, muted) {
-        player.volume = if (muted) 0f else 1f
+    LaunchedEffect(muted) { player.volume = if (muted) 0f else 1f }
+    LaunchedEffect(current.key, resumed, pager.isScrollInProgress) {
         player.playWhenReady = current.video && resumed && !pager.isScrollInProgress
     }
     LaunchedEffect(current.key, vm.preload) {
         nextReady = false
         val next = posts.getOrNull(pager.settledPage + 1)
         if (vm.preload && next != null && next.localPath.isBlank()) {
-            if (next.video) LookAhead.prepare(vm.app, next)
-            else vm.app.imageLoader.execute(ImageRequest.Builder(context).data(next.url).size(1440, 2400).build())
-            nextReady = true
+            nextReady = if (next.video) LookAhead.prepare(vm.app, next)
+            else vm.app.imageLoader.execute(ImageRequest.Builder(context).data(next.url).size(1440, 2400).build()) is coil.request.SuccessResult
         }
     }
     LaunchedEffect(current.key, resumed) {
@@ -403,7 +418,11 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
             val p = posts[index]
             val isActive = index == pager.settledPage
             var imageError by remember(p.key) { mutableStateOf(false) }
+            var thumbnailError by remember(p.key) { mutableStateOf(false) }
             var imageLoaded by remember(p.key) { mutableStateOf(false) }
+            LaunchedEffect(p.key, isActive, imageLoaded, resumed) {
+                if (isActive && !p.video && imageLoaded && resumed) { delay(2000); vm.watched(p) }
+            }
             Box(Modifier.fillMaxSize()) {
                 if (isActive && p.video) AndroidView(factory = { PlayerView(it).apply {
                     useController = true; controllerShowTimeoutMs = 2500; this.player = player
@@ -416,13 +435,17 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
                     else -> p.thumbnail
                 }).size(1440, 2400).build(), contentDescription = p.filename,
                     contentScale = if (fill) ContentScale.Crop else ContentScale.Fit, modifier = Modifier.fillMaxSize(),
-                    onSuccess = { imageLoaded = true }, onError = { imageError = true })
+                    onSuccess = { imageLoaded = true }, onError = { if (imageError) thumbnailError = true; imageError = true })
                 if (isActive) {
                     if (p.video && !ready && playbackError == null || !p.video && !imageLoaded && !imageError)
                         CircularProgressIndicator(Modifier.align(Alignment.Center).size(25.dp), color = Sage, strokeWidth = 1.dp)
                     playbackError?.let { error -> Column(Modifier.align(Alignment.Center).padding(36.dp).background(Color(0xee22221b)).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(error, fontSize = 12.sp); TextButton(onClick = { playbackError = null; player.prepare(); player.play() }) { Text("Retry") }
                     } }
+                    if (!p.video && thumbnailError) Column(Modifier.align(Alignment.Center).padding(35.dp).background(Color(0xee22221b)).padding(18.dp)) {
+                        Text("This image could not be opened. It may have expired.", fontSize = 12.sp)
+                        TextButton(onClick = { imageError = false; thumbnailError = false; imageLoaded = false }) { Text("Retry image") }
+                    }
                     Column(Modifier.align(Alignment.BottomEnd).padding(end = 13.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
                         if (p.video) Rail(if (muted) Icons.Outlined.VolumeOff else Icons.Outlined.VolumeUp, if (muted) "Unmute" else "Mute") { muted = !muted }
                         Rail(if (fill) Icons.Outlined.FullscreenExit else Icons.Outlined.Fullscreen, if (fill) "Fit" else "Fill") { fill = !fill }

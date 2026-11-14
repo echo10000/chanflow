@@ -22,6 +22,7 @@ try{
     let binary='';array.forEach(byte=>binary+=String.fromCharCode(byte));return{png,video:btoa(binary)};
   });
   const png=Buffer.from(fixtures.png,'base64'),video=Buffer.from(fixtures.video,'base64');
+  console.log('Video fixture:',video.length,'bytes; header',video.subarray(0,16).toString('hex'));
   const attachments=[1,2,3,4].map((n)=>({no:101+n,tim:100000+n,ext:n<3?'.webm':'.png',filename:`fixture-${n}`,w:320,h:180,fsize:n<3?video.length:png.length,com:`Post ${n}`,sub:n===1?'Playback fixture':''}));
   const counts=new Map();
   await page.route('**/api/**',route=>{
@@ -38,7 +39,10 @@ try{
   await page.waitForFunction(()=>document.querySelector('#next-status')?.textContent==='Next ready');
   await page.getByRole('button',{name:'Next media',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#feed-video')?.src.startsWith('blob:'));
-  await page.waitForFunction(()=>document.querySelector('#feed-video')?.currentTime>.1);
+  await page.waitForFunction(()=>document.querySelector('#feed-video')?.currentTime>.1,{},{timeout:8000}).catch(async error=>{
+    console.log(await page.locator('#feed-video').evaluate(v=>({src:v.src,paused:v.paused,ended:v.ended,ready:v.readyState,network:v.networkState,time:v.currentTime,duration:v.duration,error:v.error?.message,buffered:v.buffered.length})));
+    console.log((await page.locator('body').innerText()).slice(-1000));throw error;
+  });
   assert.equal(counts.get('/media/w/100002.webm'),1,'the next video is fetched once and reused');
   await page.getByRole('button',{name:'Unmute',exact:true}).click();
   await page.getByRole('button',{name:'Mute',exact:true}).click();

@@ -27,7 +27,7 @@ class ChanApi(private val client: OkHttpClient) {
             lastRequest = android.os.SystemClock.elapsedRealtime()
             val request = Request.Builder().url("https://a.4cdn.org/$path")
                 .header("User-Agent", "ChanFlow/${BuildConfig.VERSION_NAME} (Android reader)").build()
-            client.newCall(request).execute().use { response ->
+            client.newCall(request).awaitResponse().use { response ->
                 if (!response.isSuccessful) throw IOException(when (response.code) {
                     404 -> "This thread has expired or was removed. Saved files still work offline."
                     429 -> "4chan is limiting requests. Wait a moment and try again."
