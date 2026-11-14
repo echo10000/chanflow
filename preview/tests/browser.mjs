@@ -1,28 +1,36 @@
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
-import {mkdir} from 'node:fs/promises';
+import {mkdir,readFile,writeFile} from 'node:fs/promises';
 
 const browser=await chromium.launch(process.platform==='win32'?{executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true}:{headless:true});
 const context=await browser.newContext({viewport:{width:1365,height:900},serviceWorkers:'block'});
 const page=await context.newPage();
+await page.addInitScript(()=>localStorage.setItem('board','w'));
 const errors=[];page.on('pageerror',error=>errors.push(error.message));
 try{
   await page.goto('http://127.0.0.1:4173');
-  const fixtures=await page.evaluate(async()=>{
+  const cachedFixture=await readFile('preview/tests/fixtures/playback.webm').catch(()=>null);
+  const fixtures=await page.evaluate(async existing=>{
     const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;
     const ctx=canvas.getContext('2d');ctx.fillStyle='#71896d';ctx.fillRect(0,0,320,180);
     ctx.fillStyle='#e0e6da';ctx.font='24px sans-serif';ctx.fillText('ChanFlow playback test',22,98);
     const png=canvas.toDataURL('image/png').split(',')[1];
+    if(existing)return{png,video:existing};
+    canvas.style.cssText='position:fixed;left:0;top:0;z-index:99999';document.body.append(canvas);
     const stream=canvas.captureStream(10);const recorder=new MediaRecorder(stream,{mimeType:'video/webm;codecs=vp8'});
     const chunks=[];recorder.ondataavailable=e=>chunks.push(e.data);
-    const done=new Promise(resolve=>recorder.onstop=resolve);recorder.start();let tick=0;
-    const animation=setInterval(()=>{ctx.fillStyle=tick++%2?'#a3b7a3':'#71896d';ctx.fillRect(10,10,12,12);},100);
-    await new Promise(resolve=>setTimeout(resolve,3200));clearInterval(animation);recorder.stop();await done;stream.getTracks().forEach(t=>t.stop());
+    const done=new Promise(resolve=>recorder.onstop=resolve);const started=new Promise(resolve=>recorder.onstart=resolve);recorder.start(200);await started;let tick=0;
+    const animation=setInterval(()=>{ctx.fillStyle=tick++%2?'#a3b7a3':'#71896d';ctx.fillRect(10,10,20,20);stream.getVideoTracks()[0].requestFrame?.();},100);
+    await new Promise(resolve=>setTimeout(resolve,3200));
+    for(let i=0;i<50&&chunks.reduce((n,c)=>n+c.size,0)<2000;i++)await new Promise(resolve=>setTimeout(resolve,200));
+    clearInterval(animation);recorder.stop();await done;stream.getTracks().forEach(t=>t.stop());canvas.remove();
     const array=new Uint8Array(await new Blob(chunks,{type:'video/webm'}).arrayBuffer());
     let binary='';array.forEach(byte=>binary+=String.fromCharCode(byte));return{png,video:btoa(binary)};
-  });
+  },cachedFixture?.toString('base64')||null);
   const png=Buffer.from(fixtures.png,'base64'),video=Buffer.from(fixtures.video,'base64');
   console.log('Video fixture:',video.length,'bytes; header',video.subarray(0,16).toString('hex'));
+  assert.ok(video.length>1000,'the synthetic video fixture contains encoded frames');
+  if(!cachedFixture){await mkdir('preview/tests/fixtures',{recursive:true});await writeFile('preview/tests/fixtures/playback.webm',video);}
   const attachments=[1,2,3,4].map((n)=>({no:101+n,tim:100000+n,ext:n<3?'.webm':'.png',filename:`fixture-${n}`,w:320,h:180,fsize:n<3?video.length:png.length,com:`Post ${n}`,sub:n===1?'Playback fixture':''}));
   const counts=new Map();
   await page.route('**/api/**',route=>{

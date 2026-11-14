@@ -168,7 +168,7 @@ private fun Browse(vm: FlowViewModel, onBoards: () -> Unit) {
             IconButton(onClick = { vm.chooseBoard(vm.board) }) { Icon(Icons.Outlined.Refresh, "Refresh threads", tint = Gray, modifier = Modifier.size(20.dp)) }
         }
         LazyRow(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(23.dp), verticalAlignment = Alignment.CenterVertically) {
-            items(listOf(vm.board, "w", "g", "a", "v", "co", "lit").distinct()) { id ->
+            items(listOf(vm.board, "wsg", "w", "g", "a", "v", "co", "lit").distinct()) { id ->
                 Text("/$id/", color = if (id == vm.board) Sage else Gray, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
                     modifier = Modifier.clickable { vm.chooseBoard(id) }.padding(vertical = 7.dp))
             }

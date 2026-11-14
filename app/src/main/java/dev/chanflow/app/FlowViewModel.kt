@@ -11,11 +11,12 @@ import kotlinx.coroutines.launch
 
 class FlowViewModel(application: Application) : AndroidViewModel(application) {
     val app = application as FlowApplication
+    private val preferences = application.getSharedPreferences("settings", 0)
     var boards by mutableStateOf<List<Board>>(emptyList()); private set
     var threads by mutableStateOf<List<ThreadCard>>(emptyList()); private set
     var saved by mutableStateOf<List<MediaPost>>(emptyList()); private set
     var history by mutableStateOf<List<Watch>>(emptyList()); private set
-    var board by mutableStateOf("w"); private set
+    var board by mutableStateOf(preferences.getString("board", "wsg") ?: "wsg"); private set
     var tab by mutableStateOf("browse"); private set
     var feed by mutableStateOf<List<MediaPost>?>(null); private set
     var feedStart by mutableIntStateOf(0); private set
@@ -24,7 +25,6 @@ class FlowViewModel(application: Application) : AndroidViewModel(application) {
     var message by mutableStateOf<String?>(null); private set
     private var request: Job? = null
     private var generation = 0
-    private val preferences = application.getSharedPreferences("settings", 0)
     var allowAdult by mutableStateOf(preferences.getBoolean("adult", false)); private set
     var preload by mutableStateOf(preferences.getBoolean("preload", true)); private set
 
@@ -40,6 +40,7 @@ class FlowViewModel(application: Application) : AndroidViewModel(application) {
     fun navigate(value: String) { generation++; request?.cancel(); loading = false; error = null; feed = null; tab = value }
     fun chooseBoard(value: String) {
         if (!MediaRules.board(value)) return
+        preferences.edit().putString("board", value).apply()
         request?.cancel(); board = value; tab = "browse"; feed = null; threads = emptyList(); error = null; loading = true
         val issued = ++generation
         request = viewModelScope.launch {
