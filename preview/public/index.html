@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#10121b"><title>ChanFlow · Desktop preview</title>
+  <link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script>
+</head>
+<body>
+  <div class="preview-bar"><span>Local preview</span><div class="size-switch" aria-label="Preview size"><button id="desktop-size" class="selected">Desktop</button><button id="phone-size">Phone</button></div></div>
+  <div class="app" id="app">
+    <header class="topnav">
+      <a class="brand" href="#browse" aria-label="ChanFlow home">chanflow<span class="brand-slashes">//</span></a>
+      <nav aria-label="Main navigation">
+        <button class="nav-item active" data-tab="browse" id="browse-nav">Explore</button>
+        <button class="nav-item" data-tab="saved" id="saved-nav">Library<span class="saved-count">0</span></button>
+      </nav>
+      <div id="board-shortcuts" hidden></div>
+      <button class="all-boards" id="all-boards"><span class="icon" data-icon="search"></span><span>Find a board</span><kbd>/</kbd></button>
+    </header>
+    <main id="main"><div class="loading-state"><span class="spinner"></span>Connecting to 4chan…</div></main>
+    <nav class="mobile-nav" aria-label="Mobile navigation"><button data-tab="browse"><span class="icon" data-icon="grid"></span>Browse</button><button data-tab="saved"><span class="icon" data-icon="bookmark"></span>Saved</button></nav>
+  </div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <dialog id="dialog"><button id="dialog-close" class="icon-button close-dialog" aria-label="Close dialog">×</button><div id="dialog-content"></div></dialog>
+</body>
+</html>
