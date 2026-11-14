@@ -35,6 +35,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -414,7 +416,7 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
             }
             IconButton(onClick = onSaveThread) { Icon(Icons.Outlined.Download, "Save whole thread", Modifier.size(20.dp), tint = Sage) }
         }
-        VerticalPager(state = pager, beyondViewportPageCount = 1, key = { posts[it].key }, modifier = Modifier.weight(1f).fillMaxWidth().background(Color.Black)) { index ->
+        VerticalPager(state = pager, beyondViewportPageCount = 1, key = { posts[it].key }, modifier = Modifier.weight(1f).fillMaxWidth().background(Color.Black).semantics { contentDescription = "Media feed" }) { index ->
             val p = posts[index]
             val isActive = index == pager.settledPage
             var imageError by remember(p.key) { mutableStateOf(false) }

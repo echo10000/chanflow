@@ -8,6 +8,7 @@ import org.junit.Rule
 import org.junit.Test
 import java.io.File
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class LibraryUiTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
     @Test fun opensASavedImageFromTheLibraryWithoutNetworkMedia() {
@@ -35,7 +36,11 @@ class LibraryUiTest {
         val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
         val bytes = instrumentation.context.assets.open("playback.webm").use { it.readBytes() }
         val post = MediaPost("w", 10201, 10202, 123456780, ".webm", "offline-video-fixture", "Offline video", "A locally saved video", 320, 180, bytes.size.toLong())
-        runBlocking { app.vault.file(post).writeBytes(bytes); app.vault.record(post) }
+        val next = post.copy(post = 10203, timestamp = 123456781, filename = "offline-video-next")
+        runBlocking {
+            app.vault.file(next).writeBytes(bytes); app.vault.record(next); kotlinx.coroutines.delay(10)
+            app.vault.file(post).writeBytes(bytes); app.vault.record(post)
+        }
         try {
             compose.onNodeWithText("Library", useUnmergedTree = true).performClick()
             compose.waitUntil(10000) { compose.onAllNodesWithText("offline-video-fixture.webm").fetchSemanticsNodes().isNotEmpty() }
@@ -48,10 +53,18 @@ class LibraryUiTest {
                 }
                 playing
             }
+            var firstPlayer = 0
+            instrumentation.runOnMainSync { firstPlayer = System.identityHashCode(findPlayer(compose.activity.window.decorView)?.player) }
+            compose.onNodeWithContentDescription("Media feed", useUnmergedTree = true).performTouchInput { swipeUp() }
+            compose.waitUntil(10000) { compose.onAllNodesWithText("offline-video-next.webm").fetchSemanticsNodes().isNotEmpty() }
+            instrumentation.runOnMainSync {
+                org.junit.Assert.assertEquals("Swiping reuses the same native player", firstPlayer,
+                    System.identityHashCode(findPlayer(compose.activity.window.decorView)?.player))
+            }
             instrumentation.uiAutomation.executeShellCommand("screencap -p /data/local/tmp/chanflow-video.png").use { descriptor ->
                 java.io.FileInputStream(descriptor.fileDescriptor).use { it.readBytes() }
             }
-        } finally { runBlocking { app.vault.removeHistory(setOf(post.key)); app.vault.delete(post) } }
+        } finally { runBlocking { app.vault.removeHistory(setOf(post.key, next.key)); app.vault.delete(post); app.vault.delete(next) } }
     }
 
     private fun findPlayer(view: android.view.View): androidx.media3.ui.PlayerView? {
