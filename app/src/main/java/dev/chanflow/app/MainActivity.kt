@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -80,7 +81,11 @@ private val Palette = darkColorScheme(primary = Sage, onPrimary = Ink, backgroun
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.rgb(17, 17, 17))
+        )
+        if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
         setContent { MaterialTheme(colorScheme = Palette) { FlowUi() } }
     }
     fun askNotifications() {
@@ -356,6 +361,7 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
     var muted by rememberSaveable { mutableStateOf(true) }
     var fill by rememberSaveable { mutableStateOf(false) }
     var ready by remember { mutableStateOf(false) }
+    var playing by remember { mutableStateOf(false) }
     var playbackError by remember { mutableStateOf<String?>(null) }
     var nextReady by remember { mutableStateOf(false) }
     val current = posts[pager.settledPage]
@@ -364,6 +370,7 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
     DisposableEffect(player, owner) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) { ready = state == Player.STATE_READY }
+            override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
             override fun onPlayerError(error: PlaybackException) { playbackError = "This video could not play on this device. Try again or swipe to another file." }
         }
         player.addListener(listener)
@@ -425,9 +432,11 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
             LaunchedEffect(p.key, isActive, imageLoaded, resumed) {
                 if (isActive && !p.video && imageLoaded && resumed) { delay(2000); vm.watched(p) }
             }
-            Box(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize().pointerInput(p.key, isActive) {
+                detectTapGestures { if (isActive && p.video) { if (player.isPlaying) player.pause() else player.play() } }
+            }) {
                 if (isActive && p.video) AndroidView(factory = { PlayerView(it).apply {
-                    useController = true; controllerShowTimeoutMs = 2500; this.player = player
+                    useController = false; this.player = player
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                 } }, update = { it.player = player; it.resizeMode = if (fill) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT },
                     onRelease = { it.player = null }, modifier = Modifier.fillMaxSize())
@@ -441,6 +450,8 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
                 if (isActive) {
                     if (p.video && !ready && playbackError == null || !p.video && !imageLoaded && !imageError)
                         CircularProgressIndicator(Modifier.align(Alignment.Center).size(25.dp), color = Sage, strokeWidth = 1.dp)
+                    if (p.video && ready && !playing && playbackError == null)
+                        Icon(Icons.Outlined.PlayArrow, "Play video", Modifier.align(Alignment.Center).size(44.dp), tint = Paper)
                     playbackError?.let { error -> Column(Modifier.align(Alignment.Center).padding(36.dp).background(Color(0xee22221b)).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(error, fontSize = 12.sp); TextButton(onClick = { playbackError = null; player.prepare(); player.play() }) { Text("Retry") }
                     } }
@@ -459,6 +470,7 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
                 }
             }
         }
+        if (current.video) key(current.key) { VideoTimeline(player) }
         HorizontalDivider(color = Line)
         Row(Modifier.fillMaxWidth().heightIn(min = 79.dp).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -470,6 +482,37 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
             Text("${pager.settledPage + 1} / ${posts.size}", fontSize = 10.sp, color = Gray, modifier = Modifier.padding(start = 15.dp))
         }
     }
+}
+
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable
+private fun VideoTimeline(player: ExoPlayer) {
+    var position by remember { mutableLongStateOf(0) }
+    var duration by remember { mutableLongStateOf(0) }
+    var scrubbing by remember { mutableStateOf(false) }
+    var seekable by remember { mutableStateOf(false) }
+    LaunchedEffect(player) {
+        while (true) {
+            duration = player.duration.coerceAtLeast(0)
+            seekable = duration > 0 && player.isCurrentMediaItemSeekable
+            if (!scrubbing) position = player.currentPosition.coerceAtLeast(0)
+            delay(300)
+        }
+    }
+    Row(Modifier.fillMaxWidth().background(Ink).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(playbackTime(position), fontSize = 10.sp, color = Gray)
+        Slider(value = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f,
+            onValueChange = { scrubbing = true; position = (it * duration).toLong() },
+            onValueChangeFinished = { if (seekable) player.seekTo(position); scrubbing = false },
+            enabled = seekable, modifier = Modifier.weight(1f).height(32.dp).padding(horizontal = 10.dp)
+                .semantics { contentDescription = "Video position" })
+        Text(if (duration > 0) playbackTime(duration) else "--:--", fontSize = 10.sp, color = Gray)
+    }
+}
+
+private fun playbackTime(milliseconds: Long): String {
+    val seconds = milliseconds / 1000
+    return String.format(Locale.US, "%d:%02d", seconds / 60, seconds % 60)
 }
 
 @Composable

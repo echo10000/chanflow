@@ -55,6 +55,14 @@ class LibraryUiTest {
             }
             var firstPlayer = 0
             instrumentation.runOnMainSync { firstPlayer = System.identityHashCode(findPlayer(compose.activity.window.decorView)?.player) }
+            compose.onNodeWithContentDescription("Video position", useUnmergedTree = true).assertIsDisplayed()
+            compose.onNodeWithContentDescription("Media feed", useUnmergedTree = true).performTouchInput { click(center) }
+            compose.waitUntil(3000) {
+                var paused = false
+                instrumentation.runOnMainSync { paused = findPlayer(compose.activity.window.decorView)?.player?.playWhenReady == false }
+                paused
+            }
+            compose.onNodeWithContentDescription("Media feed", useUnmergedTree = true).performTouchInput { click(center) }
             compose.onNodeWithContentDescription("Media feed", useUnmergedTree = true).performTouchInput { swipeUp() }
             compose.waitUntil(10000) { compose.onAllNodesWithText("offline-video-next.webm").fetchSemanticsNodes().isNotEmpty() }
             instrumentation.runOnMainSync {

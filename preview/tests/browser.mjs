@@ -59,7 +59,7 @@ try{
   await page.getByRole('button',{name:'Fit',exact:true}).click();
   await page.getByRole('button',{name:'Post',exact:true}).click();
   await page.getByRole('button',{name:'Close dialog'}).click();
-  await page.getByRole('button',{name:'More options',exact:true}).click();
+  await page.getByRole('button',{name:'Save whole thread',exact:true}).click();
   await page.getByRole('button',{name:'Save all 4 files',exact:true}).click();
   await page.getByRole('button',{name:'Library',exact:false}).first().click();
   await page.waitForFunction(()=>document.querySelector('.saved-count')?.textContent==='4');
