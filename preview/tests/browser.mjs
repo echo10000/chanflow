@@ -88,4 +88,9 @@ try{
   await mkdir('preview/test-results',{recursive:true});await page.screenshot({path:'preview/test-results/mobile-fixtures.png',scale:'css'});
   assert.deepEqual(errors,[]);
   console.log('Passed: next-video preload/reuse, playback, mute, fit, post dialog, batch saving, duplicate-safe queue, batch deletion/cancel, board search and 390px layout.');
+}catch(error){
+  await mkdir('preview/test-results',{recursive:true});
+  await page.screenshot({path:'preview/test-results/failure.png',scale:'css'}).catch(()=>{});
+  console.error((await page.locator('body').innerText().catch(()=>'' )).slice(-2000));
+  throw error;
 }finally{await browser.close();}

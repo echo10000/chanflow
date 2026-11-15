@@ -24,7 +24,7 @@ const key = post => `${post.board}_${post.no}`;
 const bytes = n => n>=1048576?`${(n/1048576).toFixed(1)} MB`:`${Math.round(n/1024)} KB`;
 const main = $('#main'), app = $('#app');
 const state = {tab:'browse',board:localStorage.getItem('board')||'wsg',boards:[],threads:[],limit:24,feed:null,index:0,saved:[],history:[],libraryMode:'saved',watchedFilter:'all',selecting:false,selected:new Set(),muted:true,fill:false,loading:false,queue:[],job:null,failed:[],allowAdult:localStorage.getItem('adult')==='true'};
-let requestGeneration=0, mediaGeneration=0, blobUrl=null, toastTimer, lastMove=0, wheelDelta=0, wheelTimer,viewTimer,activePost=null;
+let requestGeneration=0, mediaGeneration=0, blobUrl=null, toastTimer, lastMove=-Infinity, wheelDelta=0, wheelTimer,viewTimer,activePost=null;
 const database = new Promise((resolve,reject)=>{
   const req=indexedDB.open('chanflow-vault',2);
   req.onupgradeneeded=()=>{if(!req.result.objectStoreNames.contains('media'))req.result.createObjectStore('media',{keyPath:'key'});if(!req.result.objectStoreNames.contains('history'))req.result.createObjectStore('history',{keyPath:'key'});};
@@ -109,7 +109,7 @@ async function openThread(id){
     const title=plain(posts[0].sub)||plain(posts[0].com).slice(0,100)||`Thread #${id}`;
     const media=posts.filter(p=>p.tim&&!p.filedeleted&&['.jpg','.jpeg','.png','.gif','.webm','.mp4'].includes(p.ext)).map(p=>({...p,board:state.board,thread:id,title,caption:plain(p.com),filename:plain(p.filename)||String(p.no)}));
     if(!media.length){toast('This thread has no supported media.');renderBrowse();return;}
-    state.feed={media,title,offline:false};state.index=0;renderFeed();
+    state.feed={media,title,offline:false};state.index=0;lastMove=-Infinity;renderFeed();
   }catch(e){if(generation!==requestGeneration)return;renderBrowse(e.message);}
 }
 function rail(action,name,label,extra=''){return `<button class="rail-action ${extra}" data-action="${action}" aria-label="${label}"><span class="circle">${icon(name)}</span><span>${label}</span></button>`;}
@@ -185,9 +185,9 @@ function renderSaved(){
   $('#play-all')?.addEventListener('click',()=>openSaved(state.saved,0));$('#retry-saves')?.addEventListener('click',()=>{const failed=state.failed.map(f=>f.post);state.failed=[];savePosts(failed);renderSaved();});$('#dismiss-failed')?.addEventListener('click',()=>{state.failed=[];renderSaved();});draw();updateDownloadBanner();sidebar();
 }
 function relativeTime(at){const minutes=Math.floor((Date.now()-at)/60000);if(minutes<1)return'Just now';if(minutes<60)return`${minutes}m ago`;if(minutes<1440)return`${Math.floor(minutes/60)}h ago`;return new Date(at).toLocaleDateString();}
-function openHistory(files,index){clearMedia();state.feed={media:files.map(p=>state.saved.find(s=>s.key===p.key)||p),title:'Recently watched',offline:false,history:true};state.index=index;renderFeed();}
+function openHistory(files,index){clearMedia();state.feed={media:files.map(p=>state.saved.find(s=>s.key===p.key)||p),title:'Recently watched',offline:false,history:true};state.index=index;lastMove=-Infinity;renderFeed();}
 function confirmBatchDelete(keys,historyOnly=false){if(!keys.length){toast('There is nothing to remove.');return;}const total=state.saved.filter(p=>keys.includes(p.key)).reduce((n,p)=>n+p.blob.size,0);dialog(`<h2>${historyOnly?'Remove from history?':`Delete ${keys.length} saved file${keys.length===1?'':'s'}?`}</h2><p>${historyOnly?'Playback history and resume positions will be removed. Downloaded files stay in your library.':`${bytes(total)} will be removed from this device’s library. This cannot be undone.`}</p><div class="dialog-actions"><button class="secondary" id="cancel-batch">Cancel</button><button class="secondary danger" id="confirm-batch">${historyOnly?'Remove history':`Delete ${keys.length} files`}</button></div>`);$('#cancel-batch').onclick=()=>$('#dialog').close();$('#confirm-batch').onclick=async()=>{try{if(historyOnly){for(const k of keys)await stored('delete',k,'history');await refreshHistory();}else{await deleteSavedKeys(keys);await refreshSaved();}state.selected.clear();state.selecting=false;$('#dialog').close();renderSaved();toast(historyOnly?'History removed.':'Selected files deleted.');}catch{toast('Could not remove these items. Try again.');}};}
-function openSaved(files,index){requestGeneration++;state.feed={media:files,title:'Your saved media',offline:true};state.index=index;renderFeed();}
+function openSaved(files,index){requestGeneration++;state.feed={media:files,title:'Your saved media',offline:true};state.index=index;lastMove=-Infinity;renderFeed();}
 function askDelete(post){dialog(`<h2>Delete this saved file?</h2><p>${escape(post.filename)}${escape(post.ext)} will be removed from this device’s library.</p><div class="dialog-actions"><button class="secondary" id="keep-file">Keep file</button><button class="secondary danger" id="delete-file">Delete file</button></div>`);$('#keep-file').onclick=()=>$('#dialog').close();$('#delete-file').onclick=async()=>{try{await stored('delete',key(post));await refreshSaved();state.feed.media=state.feed.media.filter(p=>key(p)!==key(post));$('#dialog').close();if(!state.feed.media.length)navigate('saved');else{state.index=Math.min(state.index,state.feed.media.length-1);renderFeed();}toast('File deleted.');}catch(e){toast('Could not delete this file. Try again.');}};}
 
 svgAll();

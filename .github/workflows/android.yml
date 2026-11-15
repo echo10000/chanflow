@@ -37,8 +37,6 @@ jobs:
 
   android:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -78,16 +76,6 @@ jobs:
             app/build/outputs/apk/
             app/build/reports/
           retention-days: 14
-      - name: Publish versioned APK
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          VERSION=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
-          test "$TAG" = "v$VERSION" || { echo '::error::Tag does not match app version'; exit 1; }
-          cp app/build/outputs/apk/release/app-release.apk chanflow.apk
-          gh release create "$TAG" chanflow.apk --title "ChanFlow $TAG" --generate-notes
 
   emulator:
     runs-on: ubuntu-latest
@@ -119,3 +107,31 @@ jobs:
             app/build/reports/androidTests/
             app/build/qa-offline.png
             app/build/qa-video.png
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [desktop, android, emulator]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: chanflow-build
+          path: release-artifact
+      - name: Publish tested APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
+          test "$TAG" = "v$VERSION" || { echo '::error::Tag does not match app version'; exit 1; }
+          APK=$(find release-artifact -path '*/release/app-release.apk' -print -quit)
+          test -n "$APK" || { echo '::error::Signed APK artifact is missing'; exit 1; }
+          cp "$APK" chanflow.apk
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" chanflow.apk --clobber
+          else
+            gh release create "$TAG" chanflow.apk --title "ChanFlow $TAG" --generate-notes
+          fi
