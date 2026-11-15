@@ -341,6 +341,9 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
             IconButton(onClick = { switchThread(1) }, enabled = !vm.loading, modifier = Modifier.size(30.dp)) { Icon(Icons.Outlined.ChevronRight, "Next thread", Modifier.size(20.dp), tint = Gray) }
             IconButton(onClick = onSaveThread) { Icon(Icons.Outlined.Download, "Save whole thread", Modifier.size(20.dp), tint = Sage) }
         }
+        // Reset the lazy layout as well as its pager state when the thread changes.
+        // The player remains outside this key and is reused between threads.
+        key(vm.feedToken) {
         VerticalPager(state = pager, beyondViewportPageCount = 1, key = { posts[it].key }, modifier = Modifier.weight(1f).fillMaxWidth().background(Color.Black).semantics { contentDescription = "Media feed" }) { index ->
             val p = posts[index]
             val isActive = index == pager.settledPage
@@ -393,6 +396,7 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
                     }
                 }
             }
+        }
         }
         if (current.video) key(current.key) { VideoTimeline(player) }
         HorizontalDivider(color = Line)
