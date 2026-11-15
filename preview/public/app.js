@@ -1,4 +1,6 @@
 import {MediaPreloader} from './preload.js';
+import {groupThreads,threadKey} from './groups.js';
+import {createLibrary} from './library.js';
 const preloader=new MediaPreloader();
 const $ = selector => document.querySelector(selector);
 const icons = {
@@ -23,8 +25,14 @@ const thumbnail = post => `/media/${post.board}/${post.tim}s.jpg`;
 const key = post => `${post.board}_${post.no}`;
 const bytes = n => n>=1048576?`${(n/1048576).toFixed(1)} MB`:`${Math.round(n/1024)} KB`;
 const main = $('#main'), app = $('#app');
-const state = {tab:'browse',board:localStorage.getItem('board')||'wsg',boards:[],threads:[],limit:24,feed:null,index:0,saved:[],history:[],libraryMode:'saved',watchedFilter:'all',selecting:false,selected:new Set(),muted:true,fill:false,loading:false,queue:[],job:null,failed:[],allowAdult:localStorage.getItem('adult')==='true'};
-let requestGeneration=0, mediaGeneration=0, blobUrl=null, toastTimer, lastMove=-Infinity, wheelDelta=0, wheelTimer,viewTimer,activePost=null;
+const state = {tab:'browse',board:localStorage.getItem('board')||'wsg',boards:[],threads:[],limit:24,feed:null,index:0,saved:[],history:[],libraryThread:'',libraryMode:'saved',watchedFilter:'all',selecting:false,selected:new Set(),muted:true,fill:false,loading:false,threadLoading:false,queue:[],job:null,failed:[],allowAdult:localStorage.getItem('adult')==='true'};
+const scrollMemory=new Map(),boardSnapshots=new Map(),threadPositions=new Map();
+let lastThreadMove=-Infinity;
+function routeKey(){return `${app.classList.contains('phone')?'phone':'desktop'}:${state.tab==='browse'?'board:'+state.board:state.libraryMode==='history'?'history':'saved:'+(state.libraryThread||'threads')}`;}
+function rememberScroll(){if(state.feed)return;scrollMemory.set(routeKey(),{windowY:window.scrollY,mainY:main.scrollTop});if(state.tab==='browse'&&!state.loading&&state.threads.length)boardSnapshots.set(state.board,{threads:state.threads,limit:state.limit,filter:$('#thread-search')?.value||''});}
+function restoreScroll(){const route=routeKey(),position=scrollMemory.get(route)||{windowY:0,mainY:0};const apply=()=>{if(!state.feed&&routeKey()===route){window.scrollTo(0,position.windowY);main.scrollTop=position.mainY;}};apply();requestAnimationFrame(apply);}
+function resumeIndex(files){const wanted=threadPositions.get(threadKey(files[0]));return Math.max(0,files.findIndex(p=>key(p)===wanted));}
+let requestGeneration=0, mediaGeneration=0, blobUrl=null, toastTimer, lastMove=-Infinity, wheelDelta=0, wheelX=0, wheelTimer,viewTimer,activePost=null;
 const database = new Promise((resolve,reject)=>{
   const req=indexedDB.open('chanflow-vault',2);
   req.onupgradeneeded=()=>{if(!req.result.objectStoreNames.contains('media'))req.result.createObjectStore('media',{keyPath:'key'});if(!req.result.objectStoreNames.contains('history'))req.result.createObjectStore('history',{keyPath:'key'});};
@@ -72,9 +80,9 @@ function sidebar(){
   $('#board-shortcuts').querySelectorAll('[data-board]').forEach(e=>e.onclick=()=>chooseBoard(e.dataset.board));
   document.querySelectorAll('.nav-item').forEach(e=>e.classList.toggle('active',e.dataset.tab===state.tab));
 }
-function clearMedia(){clearTimeout(viewTimer);mediaGeneration++;main.querySelectorAll('video').forEach(v=>{if(v.currentTime>=2&&activePost)recordWatch(activePost,v.currentTime,Number.isFinite(v.duration)?v.duration:0);v.pause();v.removeAttribute('src');v.load();});activePost=null;if(blobUrl){URL.revokeObjectURL(blobUrl);blobUrl=null;}}
-function navigate(tab){requestGeneration++;clearMedia();clearTileUrls();preloader.cancel();state.feed=null;state.tab=tab;app.classList.remove('feed-mode');sidebar();if(tab==='saved')renderSaved();else renderBrowse();}
-async function chooseBoard(id){state.board=id;localStorage.setItem('board',id);state.threads=[];state.limit=24;state.loading=true;navigate('browse');const generation=++requestGeneration;
+function clearMedia(){clearTimeout(viewTimer);mediaGeneration++;if(activePost)threadPositions.set(threadKey(activePost),key(activePost));main.querySelectorAll('video').forEach(v=>{if(v.currentTime>=2&&activePost)recordWatch(activePost,v.currentTime,Number.isFinite(v.duration)?v.duration:0);v.pause();v.removeAttribute('src');v.load();});activePost=null;if(blobUrl){URL.revokeObjectURL(blobUrl);blobUrl=null;}}
+function navigate(tab,remember=true){if(remember)rememberScroll();requestGeneration++;clearMedia();clearTileUrls();preloader.cancel();state.feed=null;state.threadLoading=false;state.tab=tab;app.classList.remove('feed-mode');sidebar();if(tab==='saved')renderSaved();else renderBrowse();}
+async function chooseBoard(id,refresh=false){rememberScroll();state.board=id;localStorage.setItem('board',id);const cached=boardSnapshots.get(id);state.threads=cached&&!refresh?cached.threads:[];state.limit=cached?.limit||24;state.loading=!cached||refresh;navigate('browse',false);if(cached&&!refresh)return;const generation=++requestGeneration;
   try{const pages=await api(`${id}/catalog.json`);if(generation!==requestGeneration)return;state.threads=pages.flatMap(p=>p.threads);state.loading=false;renderBrowse();}
   catch(e){if(generation!==requestGeneration)return;state.loading=false;renderBrowse(e.message);}
 }
@@ -90,27 +98,33 @@ function renderBrowse(error=''){
     }).join('')}</div>${state.limit<state.threads.length?'<button id="load-more" class="load-more">Show more threads</button>':''}`}`;
   main.querySelectorAll('[data-board]').forEach(e=>e.onclick=()=>chooseBoard(e.dataset.board));
   $('#more-boards').setAttribute('aria-label','Find a board');$('#more-boards').onclick=showBoards;
-  $('#refresh-board').onclick=()=>chooseBoard(state.board);$('#retry-board')?.addEventListener('click',()=>chooseBoard(state.board));
-  $('#load-more')?.addEventListener('click',()=>{const y=window.scrollY;state.limit+=24;renderBrowse();window.scrollTo(0,y);});
+  $('#refresh-board').onclick=()=>chooseBoard(state.board,true);$('#retry-board')?.addEventListener('click',()=>chooseBoard(state.board,true));
+  $('#load-more')?.addEventListener('click',()=>{rememberScroll();state.limit+=24;const view=boardSnapshots.get(state.board);if(view)view.limit=state.limit;renderBrowse();});
   main.querySelectorAll('[data-thread]').forEach(e=>e.onclick=()=>openThread(Number(e.dataset.thread)));
   $('#thread-search').oninput=e=>{const q=e.target.value.toLowerCase();main.querySelectorAll('.thread-card').forEach(card=>card.hidden=!card.textContent.toLowerCase().includes(q));};
-  sidebar();
+  $('#thread-search').value=boardSnapshots.get(state.board)?.filter||'';$('#thread-search').oninput({target:$('#thread-search')});
+  sidebar();restoreScroll();
 }
 function showBoards(){
+  const origin={windowY:window.scrollY,mainY:main.scrollTop};
+  const restoreOrigin=()=>{window.scrollTo(0,origin.windowY);main.scrollTop=origin.mainY;};
   dialog(`<h2>Find a board</h2><p>Choose where your next feed starts.</p><input class="board-search" id="board-search" placeholder="Search boards…" aria-label="Search boards"><label class="adult-option"><input type="checkbox" id="adult-boards" ${state.allowAdult?'checked':''}>Show adult boards (18+)</label><div class="board-results" id="board-results"></div>`);
-  const draw=()=>{const q=$('#board-search').value.toLowerCase();$('#board-results').innerHTML=state.boards.filter(b=>(b.ws_board||state.allowAdult)&&`${b.board} ${b.title}`.toLowerCase().includes(q)).map(b=>`<button class="board-result" data-id="${b.board}"><b>/${b.board}/</b><span>${escape(b.title)}${b.ws_board?'':' (18+)'}</span></button>`).join('');$('#board-results').querySelectorAll('button').forEach(e=>e.onclick=()=>{$('#dialog').close();chooseBoard(e.dataset.id);});};
-  $('#board-search').oninput=draw;$('#adult-boards').onchange=e=>{state.allowAdult=e.target.checked;localStorage.setItem('adult',String(state.allowAdult));draw();};draw();$('#board-search').focus();
+  const draw=()=>{const q=$('#board-search').value.toLowerCase();$('#board-results').innerHTML=state.boards.filter(b=>(b.ws_board||state.allowAdult)&&`${b.board} ${b.title}`.toLowerCase().includes(q)).map(b=>`<button class="board-result" data-id="${b.board}"><b>/${b.board}/</b><span>${escape(b.title)}${b.ws_board?'':' (18+)'}</span></button>`).join('');$('#board-results').querySelectorAll('button').forEach(e=>e.onclick=()=>{$('#dialog').close();restoreOrigin();chooseBoard(e.dataset.id);});};
+  $('#board-search').oninput=draw;$('#adult-boards').onchange=e=>{state.allowAdult=e.target.checked;localStorage.setItem('adult',String(state.allowAdult));draw();};draw();$('#board-search').focus({preventScroll:true});restoreOrigin();
 }
-async function openThread(id){
-  clearMedia();const generation=++requestGeneration;
-  main.innerHTML='<div class="loading-state"><span class="spinner"></span>Opening the media feed…</div>';
+async function openThread(id,transition=false){
+  if(!transition)rememberScroll();clearMedia();const generation=++requestGeneration;const board=state.board;
+  state.threadLoading=true;
+  if(!transition)main.innerHTML='<div class="loading-state"><span class="spinner"></span>Opening the media feed…</div>';
+  else $('#feed-stage').insertAdjacentHTML('beforeend','<div class="feed-loading" id="thread-loading"><span class="spinner"></span>Opening thread…</div>');
   try{
-    const {posts}=await api(`${state.board}/thread/${id}.json`);if(generation!==requestGeneration)return;
+    const {posts}=await api(`${board}/thread/${id}.json`);if(generation!==requestGeneration)return;
     const title=plain(posts[0].sub)||plain(posts[0].com).slice(0,100)||`Thread #${id}`;
     const media=posts.filter(p=>p.tim&&!p.filedeleted&&['.jpg','.jpeg','.png','.gif','.webm','.mp4'].includes(p.ext)).map(p=>({...p,board:state.board,thread:id,title,caption:plain(p.com),filename:plain(p.filename)||String(p.no)}));
-    if(!media.length){toast('This thread has no supported media.');renderBrowse();return;}
-    state.feed={media,title,offline:false};state.index=0;lastMove=-Infinity;renderFeed();
-  }catch(e){if(generation!==requestGeneration)return;renderBrowse(e.message);}
+    if(!media.length){toast('This thread has no supported media.');if(transition)renderFeed();else renderBrowse();return;}
+    state.feed={media,title,offline:false};state.index=resumeIndex(media);lastMove=-Infinity;state.threadLoading=false;renderFeed();
+  }catch(e){if(generation!==requestGeneration)return;if(transition){toast(e.message);renderFeed();}else renderBrowse(e.message);}
+  finally{if(generation===requestGeneration){state.threadLoading=false;$('#thread-loading')?.remove();}}
 }
 function rail(action,name,label,extra=''){return `<button class="rail-action ${extra}" data-action="${action}" aria-label="${label}"><span class="circle">${icon(name)}</span><span>${label}</span></button>`;}
 function renderFeed(){
@@ -121,10 +135,13 @@ function renderFeed(){
     <div class="feed-rail">${video?rail('volume',state.muted?'mute':'volume',state.muted?'Unmute':'Mute'):''}${rail('fit','expand',state.fill?'Fit':'Fill')}${rail('save',saved?'check':'download',saved?'Saved':'Save',saved?'saved':'')}${rail('post','chat','Post')}${post.blob?rail('delete','trash','Delete'):''}</div></div>
     <footer class="feed-caption"><div class="caption-text"><h3>${escape(post.filename)}${escape(post.ext)}</h3><p>${escape(post.caption||`${post.width||post.w||'?'} × ${post.height||post.h||'?'} · ${bytes(post.fsize||post.blob?.size||0)}`)}</p><span class="next-status" id="next-status"></span></div><div class="feed-position"><button id="prev-media" class="icon-button" aria-label="Previous media">${icon('up')}</button><span class="position-label">${state.index+1} / ${state.feed.media.length}</span><button id="next-media" class="icon-button" aria-label="Next media">${icon('down')}</button></div></footer><div class="feed-hint">Scroll or press ↑ ↓ to browse${video?' · Click video to pause':''}</div></section>`;
   $('#back-feed').onclick=()=>navigate(state.tab);$('#prev-media').onclick=()=>move(-1);$('#next-media').onclick=()=>move(1);$('#thread-actions').onclick=threadActions;
+  main.querySelector('.feed-header').insertAdjacentHTML('afterend','<div class="thread-navigation"><button class="text-button" id="prev-thread" aria-label="Previous thread">← Thread</button><span>↑↓ files / ←→ threads</span><button class="text-button" id="next-thread" aria-label="Next thread">Thread →</button></div>');
+  $('#prev-thread').onclick=()=>switchThread(-1);$('#next-thread').onclick=()=>switchThread(1);
+  const boardLink=main.querySelector('.feed-header p');boardLink.textContent=`/${post.board}/ / ${post.blob?'Saved on this device':'Thread #'+post.thread}`;boardLink.setAttribute('role','button');boardLink.tabIndex=0;boardLink.setAttribute('aria-label','Choose board');boardLink.onclick=showBoards;boardLink.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();showBoards();}};
   if(!state.feed.offline&&!state.feed.history){const batch=document.createElement('button');batch.className='text-button batch-save';batch.setAttribute('aria-label','Save whole thread');batch.title='Save whole thread';batch.innerHTML=icon('download')+'<span>Save thread</span>';batch.onclick=threadActions;$('#thread-actions').before(batch);}
   main.querySelectorAll('[data-action]').forEach(e=>e.onclick=event=>{event.stopPropagation();const action=e.dataset.action;if(action==='save')savePosts([post]);if(action==='volume'){state.muted=!state.muted;const v=$('#feed-video');if(v)v.muted=state.muted;e.innerHTML=`<span class="circle">${icon(state.muted?'mute':'volume')}</span><span>${state.muted?'Unmute':'Mute'}</span>`;e.setAttribute('aria-label',state.muted?'Unmute':'Mute');}if(action==='fit'){state.fill=!state.fill;$('#feed-stage').classList.toggle('fill',state.fill);e.querySelector('span:last-child').textContent=state.fill?'Fit':'Fill';e.setAttribute('aria-label',state.fill?'Fit':'Fill');}if(action==='post')showPost(post);if(action==='delete')askDelete(post);});
-  const stage=$('#feed-stage');stage.onwheel=e=>{if(e.target.closest('.feed-rail'))return;e.preventDefault();wheelDelta+=e.deltaY;clearTimeout(wheelTimer);wheelTimer=setTimeout(()=>wheelDelta=0,120);if(Math.abs(wheelDelta)>45){move(wheelDelta>0?1:-1);wheelDelta=0;}};
-  let start=null;stage.ontouchstart=e=>{if(!e.target.closest('button'))start={x:e.touches[0].clientX,y:e.touches[0].clientY};};stage.ontouchend=e=>{if(!start)return;const dy=e.changedTouches[0].clientY-start.y,dx=e.changedTouches[0].clientX-start.x;start=null;if(Math.abs(dy)>55&&Math.abs(dy)>Math.abs(dx)*1.3)move(dy<0?1:-1);};
+  const stage=$('#feed-stage');stage.onwheel=e=>{if(e.target.closest('.feed-rail'))return;e.preventDefault();clearTimeout(wheelTimer);wheelTimer=setTimeout(()=>{wheelDelta=0;wheelX=0;},120);if(Math.abs(e.deltaX)>Math.abs(e.deltaY)*1.3){wheelX+=e.deltaX;if(Math.abs(wheelX)>65){switchThread(wheelX>0?1:-1);wheelX=0;}}else{wheelDelta+=e.deltaY;if(Math.abs(wheelDelta)>45){move(wheelDelta>0?1:-1);wheelDelta=0;}}};
+  let start=null;stage.ontouchstart=e=>{if(!e.target.closest('button'))start={x:e.touches[0].clientX,y:e.touches[0].clientY};};stage.ontouchend=e=>{if(!start)return;const dy=e.changedTouches[0].clientY-start.y,dx=e.changedTouches[0].clientX-start.x;start=null;if(Math.abs(dy)>55&&Math.abs(dy)>Math.abs(dx)*1.3)move(dy<0?1:-1);else if(Math.abs(dx)>65&&Math.abs(dx)>Math.abs(dy)*1.3)switchThread(dx<0?1:-1);};
   const buffered=post.blob||preloader.get(mediaUrl(post));
   const source=buffered?URL.createObjectURL(buffered):mediaUrl(post);if(buffered)blobUrl=source;
   const ready=()=>{if(serial!==mediaGeneration)return;$('#media-loading')?.remove();};
@@ -134,7 +151,18 @@ function renderFeed(){
   if(!post.blob){const next=state.feed.media[state.index+1];preloader.next(next&&!next.blob?mediaUrl(next):null,next?.fsize||0,()=>{if(serial===mediaGeneration&&$('#next-status'))$('#next-status').textContent='Next ready';});}
 }
 function move(delta){if(!state.feed||$('#dialog').open)return;const now=performance.now();if(now-lastMove<240)return;const index=state.index+delta;if(index<0||index>=state.feed.media.length){toast(index<0?'First item in this feed.':'You’ve reached the end of this thread.');return;}lastMove=now;state.index=index;renderFeed();}
-document.addEventListener('keydown',e=>{if($('#dialog').open||['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName))return;if(e.key==='/'){e.preventDefault();showBoards();return;}if(!state.feed)return;if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();move(e.key==='ArrowDown'?1:-1);}if(e.key===' '&&$('#feed-video')){e.preventDefault();$('#feed-video').click();}if(e.key==='Escape')navigate(state.tab);});
+async function switchThread(direction){
+  if(!state.feed||state.threadLoading||$('#dialog').open||performance.now()-lastThreadMove<400)return;
+  const post=state.feed.media[state.index];let candidates,next;
+  if(state.feed.offline||state.feed.history){const available=groupThreads(state.feed.history?state.history:state.saved);candidates=(state.feed.threadOrder||available.map(g=>g.key)).map(id=>available.find(g=>g.key===id)).filter(g=>g&&g.board===post.board);const at=candidates.findIndex(g=>g.thread===post.thread);next=at>=0?candidates[at+direction]:null;}
+  else{candidates=state.threads.filter(t=>t.tim||t.images>0);const at=candidates.findIndex(t=>t.no===post.thread);next=at>=0?candidates[at+direction]:null;}
+  if(!next){toast(`${direction>0?'Last':'First'} thread on /${post.board}/.`);return;}
+  lastThreadMove=performance.now();
+  if(state.feed.history)openHistory(next.files,resumeIndex(next.files));
+  else if(state.feed.offline)openSaved(next.files,resumeIndex(next.files));
+  else await openThread(next.no,true);
+}
+document.addEventListener('keydown',e=>{if(e.altKey||e.metaKey||e.ctrlKey||$('#dialog').open||['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName))return;if(e.key==='/'){e.preventDefault();showBoards();return;}if(!state.feed)return;if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();move(e.key==='ArrowDown'?1:-1);}if((e.key==='ArrowLeft'||e.key==='ArrowRight')&&!e.repeat){e.preventDefault();switchThread(e.key==='ArrowRight'?1:-1);}if(e.key===' '&&$('#feed-video')){e.preventDefault();$('#feed-video').click();}if(e.key==='Escape')navigate(state.tab);});
 document.addEventListener('visibilitychange',()=>{const video=$('#feed-video');if(!video)return;if(document.hidden)video.pause();else video.play().catch(()=>{});});
 function showPost(post){dialog(`<h2>${escape(post.title)}</h2><p>/${escape(post.board)}/ · Post #${post.no}</p><p>${escape(post.caption||'This post has no text.')}</p><p>${escape(post.filename)}${escape(post.ext)} · ${bytes(post.fsize||post.blob?.size||0)}</p><div class="dialog-actions"><button class="primary" id="post-save">Save to library</button></div>`);$('#post-save').onclick=()=>{savePosts([post]);$('#dialog').close();};}
 function threadActions(){const offline=state.feed.offline,history=state.feed.history;dialog(`<h2>${offline?'Offline library':history?'Recently watched':'Save this thread'}</h2><p>${offline?'These files play directly from this browser’s storage.':history?'History stores the media you opened and your playback positions. Files marked Offline are saved on this device.':`Save all ${state.feed.media.length} attachments (${bytes(state.feed.media.reduce((n,p)=>n+(p.fsize||0),0))}) inside ChanFlow. Already saved files are skipped. Cancel the queue in Library.`}</p><div class="dialog-actions">${offline||history?'':`<button class="primary" id="save-thread">Save all ${state.feed.media.length} files</button>`}<button class="secondary" id="close-options">Close</button></div>`);$('#close-options').onclick=()=>$('#dialog').close();$('#save-thread')?.addEventListener('click',()=>{savePosts(state.feed.media);$('#dialog').close();});}
@@ -152,43 +180,17 @@ async function runQueue(){if(state.job||!state.queue.length)return;const post=st
     await stored('put',{...post,key:key(post),blob,thumb,savedAt:Date.now()});await refreshSaved();toast('Saved inside ChanFlow. Available offline.');
     if(state.feed&&key(state.feed.media[state.index])===key(post)){const e=main.querySelector('[data-action="save"]');if(e){e.classList.add('saved');e.setAttribute('aria-label','Saved');e.innerHTML=`<span class="circle">${icon('check')}</span><span>Saved</span>`;}}
   }catch(e){if(e.name!=='AbortError'){state.failed.push({post,error:e.message});toast(e.name==='QuotaExceededError'?'Storage is full. Delete some saved files and try again.':e.message);}}
-  finally{state.job=null;if(state.tab==='saved'&&!state.feed)renderSaved();runQueue();updateDownloadBanner();}
+  finally{state.job=null;if(state.tab==='saved'&&!state.feed){rememberScroll();renderSaved();}runQueue();updateDownloadBanner();}
 }
 function updateDownloadBanner(){let banner=$('#download-banner');if(state.tab!=='saved'||state.feed)return;if(!state.job&&!state.queue.length){banner?.remove();return;}if(!banner){main.querySelector('.library-tools')?.insertAdjacentHTML('beforebegin','<div class="download-banner" id="download-banner"></div>');banner=$('#download-banner');}if(!banner)return;const j=state.job;banner.innerHTML=`<span class="spinner"></span><span>${j?`Saving ${escape(j.post.filename).slice(0,35)}… ${j.total?Math.round(j.received*100/j.total)+'%':bytes(j.received)}`:'Queued'}${state.queue.length?` · ${state.queue.length} next`:''}</span><button class="text-button" id="cancel-downloads">Cancel</button>`;$('#cancel-downloads').onclick=()=>{state.queue=[];state.job?.controller.abort();toast('Save queue cancelled. Completed files are kept.');};}
 let tileUrls=[];
 function clearTileUrls(){tileUrls.forEach(URL.revokeObjectURL);tileUrls=[];}
-function renderSaved(){
-  clearTileUrls();const size=state.saved.reduce((n,p)=>n+p.blob.size,0),recent=state.libraryMode==='history';
-  main.innerHTML=`<header class="page-top"><div><h1>Library</h1><p>${state.saved.length} saved files / ${bytes(size)} on this device</p></div>${state.saved.length?'<button class="text-button" id="play-all">'+icon('play')+'Play saved</button>':''}</header>
-  <div class="library-tabs"><button class="library-tab ${!recent?'active':''}" id="saved-tab">Downloads</button><button class="library-tab ${recent?'active':''}" id="history-tab">Recently watched</button></div>
-  <div class="library-tools"><input id="saved-search" placeholder="${recent?'Search history…':'Search saved media…'}" aria-label="Search library"><select id="saved-sort" aria-label="Sort library"><option value="recent">${recent?'Last watched':'Newest first'}</option><option value="oldest">Oldest first</option><option value="board">By board</option><option value="thread">By thread</option></select><button class="text-button" id="select-files">${state.selecting?'Done':'Select files'}</button>${recent?'<button class="text-button" id="clear-history">Clear history</button>':''}</div>
-  <div class="library-actions" id="library-actions">${state.selecting?'<button class="text-button" id="select-all">Select visible</button><span id="selection-count">'+state.selected.size+' selected</span><button class="text-button delete-selected" id="delete-selected">'+(recent?'Remove selected':'Delete selected')+'</button>':!recent?'<span>Available offline</span><div class="library-filter"><button data-filter="all">All</button><button data-filter="unwatched">Unwatched</button><button data-filter="watched">Watched</button></div>':'<span>Resume from where you stopped</span>'}</div>
-  ${state.failed.length?`<div class="error-message" id="failed-saves">${state.failed.length} save${state.failed.length===1?'':'s'} failed. <button class="text-button" id="retry-saves">Retry</button><button class="text-button" id="dismiss-failed">Dismiss</button></div>`:''}<div id="saved-content"></div>`;
-  let visible=[];
-  const threadOptions=[...new Map((recent?state.history:state.saved).map(p=>[`${p.board}_${p.thread}`,p])).values()];
-  $('#saved-sort').insertAdjacentHTML('afterend',`<select id="library-thread" aria-label="Filter library by thread"><option value="">All threads</option>${threadOptions.map(p=>`<option value="${p.board}_${p.thread}">/${p.board}/ ${escape(p.title).slice(0,100)}</option>`).join('')}</select>`);
-  function draw(){clearTileUrls();const q=$('#saved-search').value.toLowerCase(),sort=$('#saved-sort').value;let files=(recent?state.history:state.saved).filter(p=>`${p.filename} ${p.title} ${p.board}`.toLowerCase().includes(q)&&(!$('#library-thread').value||`${p.board}_${p.thread}`===$('#library-thread').value));if(!recent&&state.watchedFilter!=='all')files=files.filter(p=>state.history.some(h=>h.key===p.key)===(state.watchedFilter==='watched'));if(sort==='oldest')files.reverse();if(sort==='board')files.sort((a,b)=>a.board.localeCompare(b.board));if(sort==='thread')files.sort((a,b)=>a.board.localeCompare(b.board)||b.thread-a.thread);visible=files;
-    $('#saved-content').innerHTML=!files.length?`<div class="empty-state">${icon('bookmark')}<h2>${q?'No matching files':recent?'Nothing watched yet':state.watchedFilter==='all'?'Your library starts here':'No files in this filter'}</h2><p>${q?'Try a different search.':recent?'Media you view appears here with its playback position.':state.watchedFilter==='all'?'Save a file or a whole thread. Play it here, even offline.':'Choose All to see your downloaded files.'}</p>${!recent&&!q&&state.watchedFilter==='all'?'<button class="primary" id="browse-empty">Explore threads</button>':''}</div>`:`<div class="saved-grid">${files.map(p=>{
-      const saved=state.saved.find(s=>s.key===p.key),history=state.history.find(h=>h.key===p.key);
-      const preview=saved?.thumb||(!['.webm','.mp4'].includes(p.ext)?saved?.blob:null);let src=preview?URL.createObjectURL(preview):thumbnail(p);if(preview)tileUrls.push(src);
-      const watched=!!history,progress=history?.duration>0?Math.min(100,history.position*100/history.duration):0;
-      const ratio=Math.min(2,Math.max(.65,(p.w||p.width||240)/(p.h||p.height||180)));
-      return `<button class="saved-tile ${state.selected.has(p.key)?'selected-tile':''}" data-key="${p.key}" ${state.selecting?`aria-pressed="${state.selected.has(p.key)}"`:''}><div class="thread-cover" style="--ratio:${ratio}">${state.selecting?`<span class="selection-mark">${state.selected.has(p.key)?icon('check'):''}</span>`:''}${src?`<img src="${src}" alt="" loading="lazy" decoding="async">`:''}<span class="media-count">${icon(['.webm','.mp4'].includes(p.ext)?'play':'image')}${saved?bytes(saved.blob.size):'Stream'}</span>${progress?`<div class="progress-bar"><span style="width:${progress}%"></span></div>`:''}</div><h3>${escape(p.filename)}${escape(p.ext)}</h3><p>/${p.board}/ &nbsp; ${recent?relativeTime(p.watchedAt):new Date(p.savedAt).toLocaleDateString()}${watched&&!recent?' <span class="watched-mark">Watched</span>':''}${recent&&saved?' / Offline':''}</p></button>`;
-    }).join('')}</div>`;
-    $('#browse-empty')?.addEventListener('click',()=>navigate('browse'));$('#saved-content').querySelectorAll('[data-key]').forEach(e=>e.onclick=()=>{if(state.selecting){if(state.selected.has(e.dataset.key))state.selected.delete(e.dataset.key);else state.selected.add(e.dataset.key);$('#selection-count').textContent=state.selected.size+' selected';draw();return;}const index=files.findIndex(p=>p.key===e.dataset.key);if(recent)openHistory(files,index);else openSaved(files,index);});
-  }
-  $('#saved-tab').onclick=()=>{state.libraryMode='saved';state.selecting=false;state.selected.clear();renderSaved();};$('#history-tab').onclick=()=>{state.libraryMode='history';state.selecting=false;state.selected.clear();renderSaved();};$('#select-files').onclick=()=>{state.selecting=!state.selecting;state.selected.clear();renderSaved();};
-  $('#saved-search').oninput=draw;$('#saved-sort').onchange=draw;$('#library-thread').onchange=draw;
-  main.querySelectorAll('[data-filter]').forEach(e=>{e.classList.toggle('active',e.dataset.filter===state.watchedFilter);e.onclick=()=>{state.watchedFilter=e.dataset.filter;main.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('active',b===e));draw();};});
-  $('#select-all')?.addEventListener('click',()=>{const all=visible.length&&visible.every(p=>state.selected.has(p.key));visible.forEach(p=>all?state.selected.delete(p.key):state.selected.add(p.key));$('#selection-count').textContent=state.selected.size+' selected';draw();});
-  $('#delete-selected')?.addEventListener('click',()=>{const keys=[...state.selected];if(!keys.length){toast('Select at least one file.');return;}confirmBatchDelete(keys,recent);});
-  $('#clear-history')?.addEventListener('click',()=>confirmBatchDelete(state.history.map(p=>p.key),true));
-  $('#play-all')?.addEventListener('click',()=>openSaved(state.saved,0));$('#retry-saves')?.addEventListener('click',()=>{const failed=state.failed.map(f=>f.post);state.failed=[];savePosts(failed);renderSaved();});$('#dismiss-failed')?.addEventListener('click',()=>{state.failed=[];renderSaved();});draw();updateDownloadBanner();sidebar();
-}
+function libraryThumbnail(p){const saved=state.saved.find(s=>s.key===p.key);const preview=saved?.thumb||(!['.webm','.mp4'].includes(p.ext)?saved?.blob:null);if(!preview)return thumbnail(p);const url=URL.createObjectURL(preview);tileUrls.push(url);return url;}
+const renderSaved=createLibrary({state,main,$,icon,escape,bytes,groupThreads,threadKey,imageSource:libraryThumbnail,clearTileUrls,rememberScroll,restoreScroll,navigate,openSaved,openHistory,confirmBatchDelete,savePosts,updateDownloadBanner,sidebar,relativeTime,toast});
 function relativeTime(at){const minutes=Math.floor((Date.now()-at)/60000);if(minutes<1)return'Just now';if(minutes<60)return`${minutes}m ago`;if(minutes<1440)return`${Math.floor(minutes/60)}h ago`;return new Date(at).toLocaleDateString();}
-function openHistory(files,index){clearMedia();state.feed={media:files.map(p=>state.saved.find(s=>s.key===p.key)||p),title:'Recently watched',offline:false,history:true};state.index=index;lastMove=-Infinity;renderFeed();}
+function openHistory(files,index=resumeIndex(files)){rememberScroll();clearMedia();const chosen=files[index];const scoped=state.history.filter(p=>threadKey(p)===threadKey(chosen)).sort((a,b)=>a.no-b.no);const order=state.feed?.history&&state.feed.media[0].board===chosen.board?state.feed.threadOrder:groupThreads(state.history).filter(g=>g.board===chosen.board).map(g=>g.key);state.feed={media:scoped.map(p=>state.saved.find(s=>s.key===p.key)||p),title:chosen.title,offline:false,history:true,threadOrder:order};state.index=Math.max(0,scoped.findIndex(p=>key(p)===key(chosen)));lastMove=-Infinity;renderFeed();}
 function confirmBatchDelete(keys,historyOnly=false){if(!keys.length){toast('There is nothing to remove.');return;}const total=state.saved.filter(p=>keys.includes(p.key)).reduce((n,p)=>n+p.blob.size,0);dialog(`<h2>${historyOnly?'Remove from history?':`Delete ${keys.length} saved file${keys.length===1?'':'s'}?`}</h2><p>${historyOnly?'Playback history and resume positions will be removed. Downloaded files stay in your library.':`${bytes(total)} will be removed from this device’s library. This cannot be undone.`}</p><div class="dialog-actions"><button class="secondary" id="cancel-batch">Cancel</button><button class="secondary danger" id="confirm-batch">${historyOnly?'Remove history':`Delete ${keys.length} files`}</button></div>`);$('#cancel-batch').onclick=()=>$('#dialog').close();$('#confirm-batch').onclick=async()=>{try{if(historyOnly){for(const k of keys)await stored('delete',k,'history');await refreshHistory();}else{await deleteSavedKeys(keys);await refreshSaved();}state.selected.clear();state.selecting=false;$('#dialog').close();renderSaved();toast(historyOnly?'History removed.':'Selected files deleted.');}catch{toast('Could not remove these items. Try again.');}};}
-function openSaved(files,index){requestGeneration++;state.feed={media:files,title:'Your saved media',offline:true};state.index=index;lastMove=-Infinity;renderFeed();}
+function openSaved(files,index=resumeIndex(files)){if(!files.length)return;rememberScroll();clearMedia();requestGeneration++;const chosen=files[index];const scoped=state.saved.filter(p=>threadKey(p)===threadKey(chosen)).sort((a,b)=>a.no-b.no);const order=state.feed?.offline&&state.feed.media[0].board===chosen.board?state.feed.threadOrder:groupThreads(state.saved).filter(g=>g.board===chosen.board).map(g=>g.key);state.libraryThread=threadKey(chosen);state.feed={media:scoped,title:chosen.title,offline:true,threadOrder:order};state.index=Math.max(0,scoped.findIndex(p=>key(p)===key(chosen)));lastMove=-Infinity;renderFeed();}
 function askDelete(post){dialog(`<h2>Delete this saved file?</h2><p>${escape(post.filename)}${escape(post.ext)} will be removed from this device’s library.</p><div class="dialog-actions"><button class="secondary" id="keep-file">Keep file</button><button class="secondary danger" id="delete-file">Delete file</button></div>`);$('#keep-file').onclick=()=>$('#dialog').close();$('#delete-file').onclick=async()=>{try{await stored('delete',key(post));await refreshSaved();state.feed.media=state.feed.media.filter(p=>key(p)!==key(post));$('#dialog').close();if(!state.feed.media.length)navigate('saved');else{state.index=Math.min(state.index,state.feed.media.length-1);renderFeed();}toast('File deleted.');}catch(e){toast('Could not delete this file. Try again.');}};}
 
 svgAll();

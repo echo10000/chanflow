@@ -11,7 +11,9 @@ Requires Node.js 22 or newer. Run `npm ci` followed by `npm run dev`, then open
 4chan API/media paths. It listens on your computer's loopback interface.
 
 The preview uses real boards and attachments. Choose a thread and scroll, swipe or
-press Up/Down. Space pauses videos. Desktop/Phone changes the preview's width.
+press Up/Down to change files. Swipe sideways or press Left/Right to change threads
+on the current board. Use the board picker to change boards. Space pauses videos.
+Desktop/Phone changes the preview's width. Back returns to your previous scroll spot.
 Save writes media into this browser's IndexedDB, without sending it to your Downloads
 folder. Browser storage is separate from Android storage. Clearing browser site data
 removes desktop saves. Browser codec support may differ from Android's.
@@ -22,8 +24,12 @@ removes desktop saves. Browser codec support may differ from Android's.
 - Images, GIFs, WebM and MP4 playback, fit/fill, mute and seek controls on Android.
 - Save a file or an entire thread. Durable Android background jobs, duplicate
   prevention, progress, cancellation and isolated failures.
-- Downloads remain in the app's private storage. Browse and play saved files offline.
-- Select and delete multiple files, including an entire thread via thread grouping.
+- Downloads remain in the app's private storage, organized into thread folders with
+  file counts, storage size and watched counts. Browse and play saved files offline.
+- Select and delete entire saved threads, or select individual files inside a folder.
+  A confirmation shows the file count and space that will be removed.
+- Catalogs and saved folders remember their scroll positions during navigation;
+  each thread remembers the last file you opened. Boards keep separate positions.
 - Recently watched retains up to 200 local records and video resume positions.
   Filter downloads by watched/unwatched. Clear history without deleting saved files.
 - Look-ahead loading prepares the next item while you watch. Android prefetches up

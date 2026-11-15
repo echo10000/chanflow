@@ -1,5 +1,5 @@
-const SHELL = 'chanflow-shell-v6';
-self.addEventListener('install', event => { event.waitUntil(caches.open(SHELL).then(cache => cache.addAll(['/','/app.js','/preload.js','/style.css']))); self.skipWaiting(); });
+const SHELL = 'chanflow-shell-v8';
+self.addEventListener('install', event => { event.waitUntil(caches.open(SHELL).then(cache => cache.addAll(['/','/app.js','/preload.js','/groups.js','/library.js','/style.css']))); self.skipWaiting(); });
 self.addEventListener('activate', event => { event.waitUntil((async()=>{for(const key of await caches.keys())if(key!==SHELL&&key.startsWith('chanflow-shell-'))await caches.delete(key);await self.clients.claim();})()); });
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);

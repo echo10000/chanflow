@@ -59,7 +59,7 @@ const server = http.createServer(async (req, res) => {
       if (upstream.body && req.method !== 'HEAD') Readable.fromWeb(upstream.body).on('error', () => res.destroy()).pipe(res);
       else { await upstream.body?.cancel(); res.end(); }
     } else {
-      const files = {'/':'index.html','/index.html':'index.html','/app.js':'app.js','/preload.js':'preload.js','/style.css':'style.css','/sw.js':'sw.js'};
+      const files = {'/':'index.html','/index.html':'index.html','/app.js':'app.js','/preload.js':'preload.js','/groups.js':'groups.js','/library.js':'library.js','/style.css':'style.css','/sw.js':'sw.js'};
       const filename = files[url.pathname];
       if (!filename) { res.writeHead(404).end('Not found'); return; }
       const body = await readFile(root + filename);

@@ -21,7 +21,15 @@ variable-aspect image wall with unboxed captions and very small corner radii.
 The feed fills the available screen. The top shows the current board/thread; a small
 right-hand rail provides mute, fit, save and discussion actions. A restrained bottom
 caption opens the post. Browse and Saved share the bottom navigation. Saved uses a
-recycling thumbnail grid and opens the same swipe viewer, entirely offline.
+thread folders with quiet mosaic covers, counts and storage sizes. Opening a folder
+reveals the recycling file grid and the same swipe viewer, entirely offline.
+
+Navigation: up/down stays within a thread; left/right changes threads on the same
+board. Board changes are explicit via the board picker. Back restores the catalog or
+folder scroll position, and returning to a thread restores its last opened file.
+Chance's local collections and KurobaEx's thread tabs/downloads informed the thread
+organization, rather than flattening all downloaded files into a single feed:
+https://github.com/moffatman/chan and https://github.com/K1rakishou/Kuroba-Experimental.
 
 Compared with a generic short-video clone: preserve images' original aspect ratios,
 keep the thread context one tap away, and clearly distinguish streaming cache from

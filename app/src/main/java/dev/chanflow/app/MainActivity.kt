@@ -11,6 +11,7 @@ import androidx.activity.SystemBarStyle
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -69,11 +71,11 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 
-private val Ink = Color(0xff111111)
-private val Paper = Color(0xffedede9)
-private val Gray = Color(0xff898985)
-private val Sage = Color(0xffa3b7a3)
-private val Line = Color(0xff30302e)
+internal val Ink = Color(0xff111111)
+internal val Paper = Color(0xffedede9)
+internal val Gray = Color(0xff898985)
+internal val Sage = Color(0xffa3b7a3)
+internal val Line = Color(0xff30302e)
 private val Palette = darkColorScheme(primary = Sage, onPrimary = Ink, background = Ink,
     surface = Ink, surfaceVariant = Color(0xff1c1c1c), onSurface = Paper,
     onSurfaceVariant = Gray, outline = Line, secondary = Sage)
@@ -98,6 +100,7 @@ class MainActivity : ComponentActivity() {
 private fun FlowUi(vm: FlowViewModel = viewModel()) {
     val context = LocalContext.current
     val snack = remember { SnackbarHostState() }
+    val panes = rememberSaveableStateHolder()
     var boards by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(false) }
     var post by remember { mutableStateOf<MediaPost?>(null) }
@@ -137,10 +140,10 @@ private fun FlowUi(vm: FlowViewModel = viewModel()) {
             if (media != null) {
                 Feed(vm, media, onBack = { vm.navigate(vm.tab) }, onSave = { save(listOf(it)) },
                     onSaveThread = { saveBatch = media }, onPost = { post = it },
-                    onDelete = { deletion = listOf(it) to false })
+                    onDelete = { deletion = listOf(it) to false }, onBoards = { boards = true })
             } else if (vm.tab == "saved") {
-                Library(vm, jobs, onDelete = { items, historyOnly -> deletion = items to historyOnly })
-            } else Browse(vm, onBoards = { boards = true })
+                panes.SaveableStateProvider("library") { Library(vm, jobs, onDelete = { items, historyOnly -> deletion = items to historyOnly }) }
+            } else panes.SaveableStateProvider("board:${vm.board}") { Browse(vm, onBoards = { boards = true }) }
         }
     }
     if (boards) BoardDialog(vm, onClose = { boards = false })
@@ -165,6 +168,7 @@ private fun FlowUi(vm: FlowViewModel = viewModel()) {
 
 @Composable
 private fun Browse(vm: FlowViewModel, onBoards: () -> Unit) {
+    val scroll = androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState()
     var filter by rememberSaveable(vm.board) { mutableStateOf("") }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Row(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 17.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -172,7 +176,7 @@ private fun Browse(vm: FlowViewModel, onBoards: () -> Unit) {
                 Text(vm.boards.firstOrNull { it.id == vm.board }?.title ?: "/${vm.board}/", fontSize = 23.sp, letterSpacing = (-.7).sp)
                 Text("/${vm.board}/  ${vm.threads.size} active threads", color = Gray, fontFamily = FontFamily.Monospace, fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp))
             }
-            IconButton(onClick = { vm.chooseBoard(vm.board) }) { Icon(Icons.Outlined.Refresh, "Refresh threads", tint = Gray, modifier = Modifier.size(20.dp)) }
+            IconButton(onClick = { vm.chooseBoard(vm.board, refresh = true) }) { Icon(Icons.Outlined.Refresh, "Refresh threads", tint = Gray, modifier = Modifier.size(20.dp)) }
         }
         LazyRow(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(23.dp), verticalAlignment = Alignment.CenterVertically) {
             items(listOf(vm.board, "wsg", "w", "g", "a", "v", "co", "lit").distinct()) { id ->
@@ -193,7 +197,7 @@ private fun Browse(vm: FlowViewModel, onBoards: () -> Unit) {
         else {
             val rows = vm.threads.filter { "${it.title} ${it.caption}".contains(filter, ignoreCase = true) }
             if (rows.isEmpty()) Empty("No matching threads. Try a different filter.")
-            LazyVerticalStaggeredGrid(columns = StaggeredGridCells.Adaptive(158.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+            LazyVerticalStaggeredGrid(columns = StaggeredGridCells.Adaptive(158.dp), state = scroll, horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalItemSpacing = 20.dp, contentPadding = PaddingValues(bottom = 24.dp)) {
                 items(rows, key = { it.id }) { row ->
                     Column(Modifier.clickable { vm.openThread(row) }) {
@@ -237,100 +241,7 @@ private fun BoardDialog(vm: FlowViewModel, onClose: () -> Unit) {
 }
 
 @Composable
-private fun Library(vm: FlowViewModel, jobs: List<WorkInfo>, onDelete: (List<MediaPost>, Boolean) -> Unit) {
-    var recent by rememberSaveable { mutableStateOf(false) }
-    var query by rememberSaveable { mutableStateOf("") }
-    var filter by rememberSaveable { mutableStateOf("All") }
-    var grouping by rememberSaveable { mutableStateOf(false) }
-    var threadFilter by rememberSaveable { mutableStateOf("") }
-    var threadMenu by remember { mutableStateOf(false) }
-    var selecting by rememberSaveable { mutableStateOf(false) }
-    var selected by remember { mutableStateOf(setOf<String>()) }
-    val watched = vm.history.associateBy { it.post.key }
-    val source = if (recent) vm.history.map { h -> vm.saved.firstOrNull { it.key == h.post.key } ?: h.post } else vm.saved
-    var rows = source.filter { "${it.title} ${it.filename} ${it.board} ${it.thread}".contains(query, true) &&
-        (threadFilter.isBlank() || "${it.board}_${it.thread}" == threadFilter) &&
-        (recent || filter == "All" || (watched.containsKey(it.key) == (filter == "Watched"))) }
-    if (grouping) rows = rows.sortedWith(compareBy<MediaPost> { it.board }.thenByDescending { it.thread })
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Row(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Library", fontSize = 25.sp, letterSpacing = (-.8).sp)
-                Text("${vm.saved.size} files / ${size(vm.saved.sumOf { it.bytes })} on this device", fontSize = 10.sp, color = Gray, modifier = Modifier.padding(top = 6.dp))
-            }
-            if (vm.saved.isNotEmpty()) TextButton(onClick = { vm.openSaved(vm.saved, 0) }) { Icon(Icons.Outlined.PlayArrow, null, Modifier.size(17.dp)); Text("Play saved", fontSize = 11.sp) }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
-            listOf(false to "Downloads", true to "Recently watched").forEach { (value, text) ->
-                Text(text, color = if (recent == value) Paper else Gray, fontSize = 12.sp,
-                    modifier = Modifier.clickable { recent = value; selected = emptySet(); selecting = false }.padding(bottom = 15.dp))
-            }
-        }
-        HorizontalDivider(color = Line)
-        TextField(value = query, onValueChange = { query = it }, placeholder = { Text("Search library…", fontSize = 12.sp) },
-            modifier = Modifier.fillMaxWidth(), singleLine = true,
-            colors = TextFieldDefaults.colors(unfocusedContainerColor = Ink, focusedContainerColor = Ink, unfocusedIndicatorColor = Color.Transparent))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            TextButton(onClick = { selecting = !selecting; selected = emptySet() }, contentPadding = PaddingValues(0.dp)) { Text(if (selecting) "Done" else "Select files", fontSize = 11.sp) }
-            if (selecting) {
-                TextButton(onClick = { selected = if (rows.all { it.key in selected }) emptySet() else rows.map { it.key }.toSet() }) { Text("Select visible", fontSize = 10.sp) }
-                Spacer(Modifier.weight(1f))
-                TextButton(enabled = selected.isNotEmpty(), onClick = { onDelete(source.filter { it.key in selected }, recent); selected = emptySet(); selecting = false }) { Text("Delete (${selected.size})", fontSize = 11.sp, color = Color(0xffd6a58e)) }
-            } else {
-                TextButton(onClick = { grouping = !grouping }) { Text(if (grouping) "By thread" else "Newest", fontSize = 11.sp) }
-                Spacer(Modifier.weight(1f))
-                if (recent) TextButton(onClick = { onDelete(source, true) }, enabled = source.isNotEmpty()) { Text("Clear history", fontSize = 11.sp, color = Gray) }
-            }
-        }
-        if (!recent && !selecting) Row(horizontalArrangement = Arrangement.spacedBy(24.dp), modifier = Modifier.padding(bottom = 16.dp)) {
-            listOf("All", "Unwatched", "Watched").forEach { label ->
-                Text(label, color = if (filter == label) Sage else Gray, fontSize = 11.sp,
-                    modifier = Modifier.clickable { filter = label }.padding(vertical = 6.dp))
-            }
-        }
-        Box {
-            TextButton(onClick = { threadMenu = true }, contentPadding = PaddingValues(0.dp)) {
-                Text(if (threadFilter.isBlank()) "All threads" else source.firstOrNull { "${it.board}_${it.thread}" == threadFilter }?.title ?: "Selected thread",
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = Gray)
-            }
-            DropdownMenu(expanded = threadMenu, onDismissRequest = { threadMenu = false }, modifier = Modifier.heightIn(max = 300.dp)) {
-                DropdownMenuItem(text = { Text("All threads", fontSize = 12.sp) }, onClick = { threadFilter = ""; selected = emptySet(); threadMenu = false })
-                source.distinctBy { "${it.board}_${it.thread}" }.forEach { p ->
-                    DropdownMenuItem(text = { Text("/${p.board}/ ${p.title}", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        onClick = { threadFilter = "${p.board}_${p.thread}"; selected = emptySet(); threadMenu = false })
-                }
-            }
-        }
-        DownloadStatus(jobs, vm)
-        if (rows.isEmpty()) Empty(if (recent) "Media you watch will appear here with its resume position."
-            else if (vm.saved.isEmpty()) "Save a file or a whole thread. Play it here, even offline." else "No files match this filter.",
-            if (!recent && vm.saved.isEmpty()) "Explore threads" else null) { vm.navigate("browse") }
-        else LazyVerticalStaggeredGrid(columns = StaggeredGridCells.Adaptive(155.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalItemSpacing = 20.dp, contentPadding = PaddingValues(bottom = 20.dp)) {
-            items(rows, key = { it.key }) { p ->
-                Column(Modifier.clickable {
-                    if (selecting) selected = if (p.key in selected) selected - p.key else selected + p.key
-                    else vm.openSaved(rows, rows.indexOf(p))
-                }) {
-                    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(2.dp)).background(Color(0xff22221e))) {
-                        AsyncImage(model = if (p.localPath.isNotBlank()) File(p.localPath) else p.thumbnail, contentDescription = null,
-                            contentScale = ContentScale.Crop, modifier = Modifier.fillMaxWidth().aspectRatio((p.width.toFloat() / p.height.coerceAtLeast(1)).coerceIn(.7f, 1.8f)))
-                        if (selecting) Checkbox(checked = p.key in selected, onCheckedChange = null, modifier = Modifier.align(Alignment.TopStart))
-                        if (p.video) Icon(Icons.Outlined.PlayArrow, null, tint = Paper, modifier = Modifier.align(Alignment.BottomEnd).padding(7.dp).size(18.dp))
-                        watched[p.key]?.let { h -> if (h.duration > 0) LinearProgressIndicator(progress = { (h.position.toFloat() / h.duration).coerceIn(0f, 1f) },
-                            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(2.dp), color = Sage, trackColor = Line) }
-                    }
-                    Text(p.filename + p.extension, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
-                    Text("/${p.board}/  ${if (p.localPath.isNotBlank()) "Offline" else "Stream"}${if (p.key in watched) "  / Watched" else ""}", fontSize = 9.sp, color = Gray)
-                    if (grouping) Text(p.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 9.sp, color = Gray)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DownloadStatus(jobs: List<WorkInfo>, vm: FlowViewModel) {
+internal fun DownloadStatus(jobs: List<WorkInfo>, vm: FlowViewModel) {
     val pending = jobs.filter { !it.state.isFinished }
     val failed = jobs.filter { it.state == WorkInfo.State.FAILED }
     if (pending.isNotEmpty()) Row(Modifier.fillMaxWidth().padding(bottom = 17.dp).background(Color(0xff1d241a)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -351,20 +262,24 @@ private fun DownloadStatus(jobs: List<WorkInfo>, vm: FlowViewModel) {
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, onSave: (MediaPost) -> Unit,
-                 onSaveThread: () -> Unit, onPost: (MediaPost) -> Unit, onDelete: (MediaPost) -> Unit) {
+                 onSaveThread: () -> Unit, onPost: (MediaPost) -> Unit, onDelete: (MediaPost) -> Unit, onBoards: () -> Unit) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val sources by produceState<CacheDataSource.Factory?>(null) { value = withContext(Dispatchers.IO) { vm.app.mediaSources } }
     if (sources == null) { Loading("Preparing playback…"); return }
     val player = remember { ExoPlayer.Builder(context).setMediaSourceFactory(DefaultMediaSourceFactory(sources!!)).build().apply { repeatMode = Player.REPEAT_MODE_ONE } }
-    val pager = rememberPagerState(initialPage = vm.feedStart.coerceIn(posts.indices)) { posts.size }
+    val pager = key(vm.feedToken) { rememberPagerState(initialPage = vm.feedStart.coerceIn(posts.indices)) { posts.size } }
     var muted by rememberSaveable { mutableStateOf(true) }
     var fill by rememberSaveable { mutableStateOf(false) }
     var ready by remember { mutableStateOf(false) }
     var playing by remember { mutableStateOf(false) }
     var playbackError by remember { mutableStateOf<String?>(null) }
     var nextReady by remember { mutableStateOf(false) }
-    val current = posts[pager.settledPage]
+    val current = posts[pager.settledPage.coerceIn(posts.indices)]
+    fun switchThread(direction: Int) {
+        if (current.video && player.currentPosition >= 2000) vm.watched(current, player.currentPosition, player.duration.coerceAtLeast(0))
+        vm.switchThread(current, direction)
+    }
     val active by rememberUpdatedState(current)
     var resumed by remember { mutableStateOf(owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
     DisposableEffect(player, owner) {
@@ -388,6 +303,7 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
         }
     }
     LaunchedEffect(current.key) {
+        vm.rememberPosition(current)
         ready = false; playbackError = null
         if (current.video) {
             val uri = if (current.localPath.isNotBlank()) android.net.Uri.fromFile(vm.app.vault.file(current)).toString() else current.url
@@ -396,8 +312,8 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
         } else { player.stop(); player.clearMediaItems() }
     }
     LaunchedEffect(muted) { player.volume = if (muted) 0f else 1f }
-    LaunchedEffect(current.key, resumed, pager.isScrollInProgress) {
-        player.playWhenReady = current.video && resumed && !pager.isScrollInProgress
+    LaunchedEffect(current.key, resumed, pager.isScrollInProgress, vm.loading) {
+        player.playWhenReady = current.video && resumed && !pager.isScrollInProgress && !vm.loading
     }
     LaunchedEffect(current.key, vm.preload) {
         nextReady = false
@@ -419,8 +335,10 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
             Column(Modifier.weight(1f)) {
                 Text(current.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
                 Text("/${current.board}/  #${current.thread}${if (current.localPath.isNotBlank()) "  / Offline" else ""}", fontFamily = FontFamily.Monospace,
-                    fontSize = 9.sp, color = Gray, modifier = Modifier.padding(top = 5.dp))
+                    fontSize = 9.sp, color = Gray, modifier = Modifier.clickable(onClickLabel = "Choose board", onClick = onBoards).padding(top = 5.dp))
             }
+            IconButton(onClick = { switchThread(-1) }, enabled = !vm.loading, modifier = Modifier.size(30.dp)) { Icon(Icons.Outlined.ChevronLeft, "Previous thread", Modifier.size(20.dp), tint = Gray) }
+            IconButton(onClick = { switchThread(1) }, enabled = !vm.loading, modifier = Modifier.size(30.dp)) { Icon(Icons.Outlined.ChevronRight, "Next thread", Modifier.size(20.dp), tint = Gray) }
             IconButton(onClick = onSaveThread) { Icon(Icons.Outlined.Download, "Save whole thread", Modifier.size(20.dp), tint = Sage) }
         }
         VerticalPager(state = pager, beyondViewportPageCount = 1, key = { posts[it].key }, modifier = Modifier.weight(1f).fillMaxWidth().background(Color.Black).semantics { contentDescription = "Media feed" }) { index ->
@@ -434,6 +352,11 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
             }
             Box(Modifier.fillMaxSize().pointerInput(p.key, isActive) {
                 detectTapGestures { if (isActive && p.video) { if (player.isPlaying) player.pause() else player.play() } }
+            }.pointerInput(p.key, isActive, vm.loading) {
+                var distance = 0f
+                detectHorizontalDragGestures(onDragStart = { distance = 0f },
+                    onHorizontalDrag = { change, amount -> if (isActive) { distance += amount; change.consume() } },
+                    onDragEnd = { if (isActive && !vm.loading && kotlin.math.abs(distance) > 64.dp.toPx()) switchThread(if (distance < 0) 1 else -1) })
             }) {
                 if (isActive && p.video) AndroidView(factory = { PlayerView(it).apply {
                     useController = false; this.player = player
@@ -448,6 +371,7 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
                     contentScale = if (fill) ContentScale.Crop else ContentScale.Fit, modifier = Modifier.fillMaxSize(),
                     onSuccess = { imageLoaded = true }, onError = { if (imageError) thumbnailError = true; imageError = true })
                 if (isActive) {
+                    if (vm.loading) CircularProgressIndicator(Modifier.align(Alignment.Center).size(25.dp), color = Sage, strokeWidth = 1.dp)
                     if (p.video && !ready && playbackError == null || !p.video && !imageLoaded && !imageError)
                         CircularProgressIndicator(Modifier.align(Alignment.Center).size(25.dp), color = Sage, strokeWidth = 1.dp)
                     if (p.video && ready && !playing && playbackError == null)
@@ -478,6 +402,7 @@ private fun Feed(vm: FlowViewModel, posts: List<MediaPost>, onBack: () -> Unit, 
                 Text(current.caption.ifBlank { "${current.width} × ${current.height} / ${size(current.bytes)}" }, fontSize = 10.sp,
                     color = Gray, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
                 if (nextReady) Text("Next ready", color = Sage, fontSize = 9.sp, modifier = Modifier.padding(top = 4.dp))
+                Text("↑↓ files   ←→ threads", color = Gray, fontSize = 9.sp, modifier = Modifier.padding(top = 5.dp))
             }
             Text("${pager.settledPage + 1} / ${posts.size}", fontSize = 10.sp, color = Gray, modifier = Modifier.padding(start = 15.dp))
         }
@@ -568,7 +493,7 @@ private fun Loading(text: String) { Column(Modifier.fillMaxSize(), verticalArran
     CircularProgressIndicator(Modifier.size(22.dp), color = Sage, strokeWidth = 1.dp); Text(text, color = Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 18.dp))
 } }
 @Composable
-private fun Empty(text: String, action: String? = null, onAction: () -> Unit = {}) { Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+internal fun Empty(text: String, action: String? = null, onAction: () -> Unit = {}) { Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
     Text(text, color = Gray, fontSize = 13.sp, lineHeight = 20.sp); if (action != null) TextButton(onClick = onAction, modifier = Modifier.padding(top = 15.dp)) { Text(action) }
 } }
-private fun size(bytes: Long): String = if (bytes >= 1048576) String.format(Locale.US, "%.1f MB", bytes / 1048576.0) else "${bytes / 1024} KB"
+internal fun size(bytes: Long): String = if (bytes >= 1048576) String.format(Locale.US, "%.1f MB", bytes / 1048576.0) else "${bytes / 1024} KB"

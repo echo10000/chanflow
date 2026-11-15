@@ -1,8 +1,14 @@
 {
   "name": "chanflow-preview",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
-  "scripts": {"dev": "node preview/server.mjs", "test": "node --test preview/tests/*.test.mjs", "test:browser": "node preview/tests/browser.mjs"},
-  "devDependencies": {"playwright": "1.65.1"}
+  "scripts": {
+    "dev": "node preview/server.mjs",
+    "test": "node --test preview/tests/*.test.mjs",
+    "test:browser": "node preview/tests/browser.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.65.1"
+  }
 }

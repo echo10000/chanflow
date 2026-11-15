@@ -1,6 +1,14 @@
 # Verification inventory
 
 Desktop preview:
+- Return from a live thread to the exact catalog offset, independently per board,
+  in desktop and phone preview modes. Cached catalogs retain loaded pages and search.
+- Downloads starts with thread folders; folder title, board, count, size and watched
+  count are visible. Open folder, play, Back and All threads retain their grid offsets.
+- Up/down changes files; left/right changes threads on the same board. Returning to
+  a thread restores its last file. Single-file thread boundaries do not crash.
+- Root selection deletes whole threads; folder selection deletes files. Cancel both
+  confirmations, then confirm and check the surviving folder/file counts.
 - Live boards/catalog loads; change board, search all boards, adult toggle and retry.
 - Open thread, previous/next and arrow/wheel/touch navigation; first/last boundaries.
 - Images/GIFs/video render without stretch; fit/fill full cycle; mute and pause.
@@ -12,6 +20,8 @@ Desktop preview:
   proxy paths; interrupted download and unavailable media.
 
 Android:
+- Native offline folder/list scroll restoration, vertical and horizontal swipes,
+  saved-thread grouping and one reused player across unequal thread sizes.
 - Compile debug and optimized release, run unit tests and Android lint.
 - Exercise browse/saved navigation and private-vault playback in emulator if available.
 - Foreground download notification and update installer require Android-specific QA.
